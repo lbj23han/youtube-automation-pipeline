@@ -1,0 +1,35 @@
+venv/
+__pycache__/
+*.pyc
+
+# 출력물 (용량 큼)
+output/
+!output/.gitkeep
+
+# 대용량 에셋 (로컬 전용)
+assets/bgm/
+assets/intro.mp4
+assets/*.mp3
+assets/*.mp4
+model_assets/
+
+# 테스트 오디오
+*.wav
+
+# 민감 정보
+config.env
+client-secrets.json
+client_secrets.json
+token.pickle
+*.pickle
+
+# 스크립트 / 콘텐츠 (개인)
+script.txt
+metadata.txt
+
+# macOS
+.DS_Store
+.claude/
+
+# 임시파일
+*.tmp

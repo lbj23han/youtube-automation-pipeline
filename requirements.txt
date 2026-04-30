@@ -1,0 +1,17 @@
+# ─── Core ────────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+
+# ─── Step 1: Image generation ────────────────────────────────────────────────
+# torch는 아래 pip install 명령어로 별도 설치 (Apple Silicon MPS 지원 버전)
+diffusers>=0.27.0
+transformers>=4.38.0
+accelerate>=0.27.0
+Pillow>=10.0.0
+
+# ─── Step 2: Text-to-Speech ──────────────────────────────────────────────────
+edge-tts>=6.1.9
+
+# ─── Step 4: YouTube API ─────────────────────────────────────────────────────
+google-api-python-client>=2.118.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0

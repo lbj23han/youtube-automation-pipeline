@@ -1,0 +1,32 @@
+{
+  "tts": {
+    "engine": "aivis",
+    "speaker_id": 1878365379,
+    "speed_scale": 0.9,
+    "pitch_scale": 0.0,
+    "intonation_scale": 1.0,
+    "chunk_limit": 200
+  },
+  "image": {
+    "style": "watercolor",
+    "scene_duration": 7
+  },
+  "bgm": {
+    "volume": 0.5,
+    "crossfade": 3.0,
+    "zones": [
+      { "end_sec": 133, "mood": "japanese" },
+      { "end_sec": 304, "mood": "warm" },
+      { "end_sec": 449, "mood": "tense" },
+      { "end_sec": 506, "mood": "sad" },
+      { "end_sec": 594, "mood": "tense" },
+      { "end_sec": 701, "mood": "dramatic" },
+      { "end_sec": 870, "mood": "nostalgic" },
+      { "end_sec": 968, "mood": "hopeful" },
+      { "end_sec": 1113, "mood": "dramatic" },
+      { "end_sec": 1296, "mood": "tense" },
+      { "end_sec": 1418, "mood": "sad" },
+      { "end_sec": 1509, "mood": "healing" }
+    ]
+  }
+}
