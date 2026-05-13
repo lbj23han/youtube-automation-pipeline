@@ -27,6 +27,7 @@ ASSETS_DIR  = Path("assets")
 FINAL_DIR   = Path("output/final")
 NORM_DIR    = CLIPS_DIR / "_norm"
 
+SCRIPT      = Path("script.txt")
 VOICEOVER   = AUDIO_DIR / "voiceover.mp3"
 INTRO_NAR   = AUDIO_DIR / "intro_narration.mp3"
 BGM         = AUDIO_DIR / "bgm_composite.mp3"
@@ -44,10 +45,11 @@ for d in [CLIPS_DIR, NORM_DIR, FINAL_DIR, SUBS_DIR]:
 
 # ── video_config.json ────────────────────────────────────────────────────────
 _VC = json.loads(VIDEO_CFG.read_text()) if VIDEO_CFG.exists() else {}
-_bgm_cfg     = _VC.get("bgm", {})
-BGM_VOLUME   = _bgm_cfg.get("volume", 0.25)
+_bgm_cfg      = _VC.get("bgm", {})
+BGM_VOLUME    = _bgm_cfg.get("volume", 0.25)
 BGM_CROSSFADE = _bgm_cfg.get("crossfade", 3.0)
-BGM_ZONES    = [(z["end_sec"], z["mood"]) for z in _bgm_cfg.get("zones", [])]
+BGM_ZONES     = [(z["end_sec"], z["mood"]) for z in _bgm_cfg.get("zones", [])]
+SCENE_SEQUENCE = _VC.get("scene_sequence", [])
 
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
@@ -93,47 +95,48 @@ def sec_to_ass(sec: float) -> str:
 
 # ── Step 1: 누락 클립 생성 ───────────────────────────────────────────────────
 def build_missing_clips():
-    """clip_NNN.mp4 없는 포지션만 scene_NNN.png 에서 생성."""
-    all_positions = sorted(
-        int(p.stem.split("_")[1])
-        for p in SCENES_DIR.glob("scene_*.png")
-        if p.stem.split("_")[1].isdigit()
-    )
-    if not all_positions:
-        print("❌ output/scenes/scene_*.png 없음"); sys.exit(1)
+    """N.mp4 없는 이미지 번호만 N.png 에서 생성. scene_sequence 기반."""
+    if not SCENE_SEQUENCE:
+        print("❌ video_config.json에 scene_sequence 없음"); sys.exit(1)
 
-    total = max(all_positions)
+    needed = sorted(set(SCENE_SEQUENCE))
 
+    audio_dur = get_duration(VOICEOVER)
+
+    # 기존 클립은 길이 그대로 유지
     existing = {}
-    for p in CLIPS_DIR.glob("clip_*.mp4"):
-        stem = p.stem.split("_")[1]
-        if stem.isdigit():
-            existing[int(stem)] = get_duration(p)
+    for n in needed:
+        p = CLIPS_DIR / f"{n}.mp4"
+        if p.exists():
+            existing[n] = get_duration(p)
 
-    missing = [i for i in range(1, total + 1) if i not in existing]
+    missing = [n for n in needed if n not in existing]
 
-    audio_dur      = get_duration(VOICEOVER)
-    existing_total = sum(existing.values())
-    scene_dur      = (audio_dur - existing_total) / len(missing) if missing else 0
+    # 기존 클립이 시퀀스에서 차지하는 총 시간 계산
+    existing_total = sum(existing[n] * SCENE_SEQUENCE.count(n) for n in existing)
+    # 나머지 시간을 missing 클립 등장 횟수로 균등분배
+    missing_occurrences = sum(SCENE_SEQUENCE.count(n) for n in missing)
+    if missing_occurrences > 0:
+        clip_dur = (audio_dur - existing_total) / missing_occurrences
+    else:
+        clip_dur = audio_dur / len(SCENE_SEQUENCE)
 
     print(
-        f"클립 현황: 전체 {total}개 | 기존 {len(existing)}개 ({existing_total:.0f}초) | "
-        f"생성 {len(missing)}개 ({scene_dur:.2f}초/개)"
+        f"클립 현황: 필요 {len(needed)}종 | 기존 {len(existing)}개 | "
+        f"생성 {len(missing)}개 ({clip_dur:.3f}초/개)"
     )
 
-    for i, pos in enumerate(missing, 1):
-        img_path = SCENES_DIR / f"scene_{pos:03d}.png"
+    for i, n in enumerate(missing, 1):
+        img_path = SCENES_DIR / f"{n}.png"
         if not img_path.exists():
-            img_path = SCENES_DIR / f"scene_{pos}.png"
-        if not img_path.exists():
-            print(f"  ⚠️  scene_{pos:03d}.png 없음 — 스킵")
+            print(f"  ⚠️  {n}.png 없음 — 스킵")
             continue
-        out = CLIPS_DIR / f"clip_{pos:03d}.mp4"
-        print(f"  [{i}/{len(missing)}] clip_{pos:03d} 생성...", end=" ", flush=True)
-        _make_clip(img_path, scene_dur, out)
+        out = CLIPS_DIR / f"{n}.mp4"
+        print(f"  [{i}/{len(missing)}] {n}.mp4 생성...", end=" ", flush=True)
+        _make_clip(img_path, clip_dur, out)
         print("완료")
 
-    return total, audio_dur
+    return audio_dur
 
 
 def _make_clip(img_path: Path, duration: float, out_path: Path):
@@ -156,38 +159,39 @@ def _make_clip(img_path: Path, duration: float, out_path: Path):
 
 # ── Step 2: 정규화 + concat ──────────────────────────────────────────────────
 def normalize_and_concat() -> Path:
-    all_clips = sorted(
-        CLIPS_DIR.glob("clip_*.mp4"),
-        key=lambda p: int(p.stem.split("_")[1]),
-    )
-    print(f"\n정규화 중 ({len(all_clips)}개)...")
+    unique_nums = sorted(set(SCENE_SEQUENCE))
+    print(f"\n정규화 중 ({len(unique_nums)}종)...")
 
-    norm_paths = []
-    for cp in all_clips:
-        np_ = NORM_DIR / cp.name
-        if np_.exists() and np_.stat().st_mtime >= cp.stat().st_mtime:
-            norm_paths.append(np_)
-            continue
+    norm_map = {}  # n -> Path
+    for n in unique_nums:
+        cp = CLIPS_DIR / f"{n}.mp4"
+        if not cp.exists():
+            print(f"  ⚠️  {n}.mp4 없음 — 스킵"); continue
+        np_ = NORM_DIR / f"{n}.mp4"
+        if not (np_.exists() and np_.stat().st_mtime >= cp.stat().st_mtime):
+            subprocess.run([
+                FFMPEG, "-y", "-i", str(cp),
+                "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                       f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,"
+                       f"setsar=1,fps={FPS},setpts=PTS-STARTPTS",
+                "-map", "0:v:0",
+                "-c:v", "h264_videotoolbox", "-b:v", "6M",
+                "-bf", "0",
+                "-r", str(FPS), "-pix_fmt", "yuv420p", "-an",
+                str(np_),
+            ], check=True, capture_output=True)
+        norm_map[n] = np_
 
-        # 항상 재인코딩 — PTS 리셋 + CFR 강제로 검은화면/타임스탬프 불일치 방지
-        subprocess.run([
-            FFMPEG, "-y", "-i", str(cp),
-            "-vf", f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
-                   f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black,"
-                   f"setsar=1,fps={FPS},setpts=PTS-STARTPTS",
-            "-map", "0:v:0",
-            "-c:v", "h264_videotoolbox", "-b:v", "6M",
-            "-bf", "0",
-            "-r", str(FPS), "-pix_fmt", "yuv420p", "-an",
-            str(np_),
-        ], check=True, capture_output=True)
-        norm_paths.append(np_)
-
+    # 시퀀스 순서대로 concat list 작성
     concat_list = CLIPS_DIR / "clips_norm.txt"
-    concat_list.write_text("\n".join(f"file '{p.resolve()}'" for p in norm_paths))
-    scenes_concat = CLIPS_DIR / "scenes_concat.mp4"
+    lines = []
+    for n in SCENE_SEQUENCE:
+        if n in norm_map:
+            lines.append(f"file '{norm_map[n].resolve()}'")
+    concat_list.write_text("\n".join(lines))
 
-    print("  concat 중...")
+    scenes_concat = CLIPS_DIR / "scenes_concat.mp4"
+    print(f"  concat 중 ({len(lines)}개 엔트리, {len(unique_nums)}종)...")
     subprocess.run([
         FFMPEG, "-y", "-f", "concat", "-safe", "0",
         "-i", str(concat_list), "-c", "copy", str(scenes_concat),
@@ -236,7 +240,7 @@ def build_bgm(audio_dur: float):
         prev = actual_end
         if actual_end >= audio_dur:
             break
-    if prev < audio_dur:
+    if prev < audio_dur - 0.5:
         zone_list.append((audio_dur - prev, zone_list[-1][1] if zone_list else "calm"))
 
     print(f"  존: {' '.join(f'{m}({d:.0f}s)' for d, m in zone_list)}")
@@ -325,21 +329,23 @@ def _split(text: str, max_chars: int = 22) -> str:
 
 
 def generate_subtitles():
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        subprocess.run([sys.executable, "-m", "pip", "install", "faster-whisper", "-q"], check=True)
-        from faster_whisper import WhisperModel
+    import stable_whisper
 
-    print("  Whisper 음성 인식 중... (small 모델, ja)")
-    model = WhisperModel("small", device="cpu", compute_type="int8")
-    segments, _ = model.transcribe(
-        str(VOICEOVER), language="ja", beam_size=5,
-        vad_filter=True, vad_parameters={"min_silence_duration_ms": 300},
-    )
+    # script.txt → 단락 단위 자막 텍스트 구성
+    raw = SCRIPT.read_text(encoding="utf-8")
+    paragraphs = []
+    for para in re.split(r"\n\s*\n", raw):
+        para = para.strip()
+        if para:
+            paragraphs.append(para.replace("\n", ""))
+    full_text = "\n".join(paragraphs)
+
+    print(f"  forced alignment 중... (stable-ts, {len(paragraphs)}단락)")
+    model = stable_whisper.load_faster_whisper("small", device="cpu", compute_type="int8")
+    result = model.align(str(VOICEOVER), full_text, language="ja", original_split=True)
 
     events = []
-    for seg in segments:
+    for seg in result.segments:
         text = seg.text.strip()
         if text:
             events.append(
@@ -352,7 +358,7 @@ def generate_subtitles():
 def prepare_subtitles(intro_dur: float):
     needs_regen = not SUBS.exists() or SUBS.stat().st_mtime < VOICEOVER.stat().st_mtime
     if needs_regen:
-        print("  자막 재생성 (Whisper)...")
+        print("  자막 재생성 (script forced alignment)...")
         generate_subtitles()
     if not SUBS.exists():
         return None
@@ -385,7 +391,12 @@ def final_render(scenes_concat: Path) -> Path:
     has_intro     = INTRO.exists()
     has_bgm       = BGM.exists()
     has_intro_nar = INTRO_NAR.exists()
-    out_path      = FINAL_DIR / f"{datetime.date.today()}.mp4"
+    _now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    out_path = FINAL_DIR / f"{_now}.mp4"
+    suffix = 2
+    while out_path.exists():
+        out_path = FINAL_DIR / f"{_now}_{suffix}.mp4"
+        suffix += 1
     TEMP_MAIN     = CLIPS_DIR / "_tmp_main.mp4"
 
     # ── A: 본영상만 독립 렌더링 (voiceover 0초부터, 자막 0초부터) ─────────────
@@ -419,6 +430,7 @@ def final_render(scenes_concat: Path) -> Path:
         "-c:v", "h264_videotoolbox", "-b:v", "5M",
         "-c:a", "aac", "-b:a", "192k",
         "-r", str(FPS), "-pix_fmt", "yuv420p",
+        "-shortest",
         str(TEMP_MAIN),
     ], capture_output=True, text=True)
     if r.returncode != 0:
@@ -470,7 +482,7 @@ def main():
     print("=" * 60)
     print("[1/5] 누락 클립 생성")
     print("=" * 60)
-    total, audio_dur = build_missing_clips()
+    audio_dur = build_missing_clips()
 
     print("\n" + "=" * 60)
     print("[2/5] 클립 정규화 + concat")

@@ -21,7 +21,7 @@
 
 ## 기술 스택
 
-- **TTS**: AivisSpeech (VoiceVox 호환 로컬 API) — 화자 コハク・ねむたい
+- **TTS**: AivisSpeech (VoiceVox 호환 로컬 API) — 화자 阿井田 茂（Mid）
 - **자막**: faster-whisper (small 모델, ja) — 실제 음성 기준 타임스탬프 추출
 - **BGM**: FFmpeg `acrossfade` 필터 — mood별 구간 자동 크로스페이드
 - **인코딩**: FFmpeg + Apple VideoToolbox (`h264_videotoolbox`) — M1/M2 하드웨어 가속
@@ -33,10 +33,9 @@
 ## 워크플로
 
 ```
-script.txt          →  gen_voiceover_vvox.py  →  voiceover.mp3
-씬 이미지 (2×2 그리드)  →  크롭 스크립트           →  scene_NNN.png × N
-시퀀스 배열 입력      →  전처리 스크립트          →  clip_NNN.mp4 배치
-video_config.json    →  render.py               →  YYYY-MM-DD.mp4
+script.txt           →  gen_voiceover_vvox.py  →  voiceover.mp3
+씬 이미지 (2×2 그리드)  →  정중앙 크롭              →  N.png × 68
+video_config.json    →  scene_sequence 입력     →  render.py  →  YYYY-MM-DD_HHMMSS.mp4
 ```
 
 ### Step 1 — 스크립트 준비
@@ -61,6 +60,12 @@ python3 gen_voiceover_vvox.py
 
 **사전 조건**: AivisSpeech 앱 실행 (포트 10101 자동 활성화)
 
+인트로 나레이션이 필요한 경우 별도 텍스트로 합성:
+
+```bash
+# 인트로 텍스트를 직접 API 호출로 합성 → output/audio/intro_narration.mp3
+```
+
 ### Step 3 — 씬 이미지 크롭
 
 외부 도구로 생성한 2×2 그리드 이미지를 `output/scenes/`에 `1-4.png`, `5-8.png` 형식으로 배치.
@@ -68,90 +73,81 @@ python3 gen_voiceover_vvox.py
 ```bash
 python3 - << 'EOF'
 from PIL import Image
-import os, re
 from pathlib import Path
 
 scenes_dir = Path("output/scenes")
-for fname in scenes_dir.glob("[0-9]*-[0-9]*.png"):
-    m = re.match(r'^(\d+)-(\d+)\.png$', fname.name)
-    start, end = int(m.group(1)), int(m.group(2))
-    img = Image.open(fname)
-    w, h = img.size
-    cx, cy = w // 2, h // 2
-    nums = list(range(start, end + 1))
-    for n, crop in zip(nums, [
-        img.crop((0, 0, cx, cy)),   # top-left
-        img.crop((cx, 0, w, cy)),   # top-right
-        img.crop((0, cy, cx, h)),   # bottom-left
-        img.crop((cx, cy, w, h)),   # bottom-right
+for grid in sorted(scenes_dir.glob("*-*.png"), key=lambda p: int(p.stem.split("-")[0])):
+    start, end = map(int, grid.stem.split("-"))
+    img = Image.open(grid)
+    cx, cy = img.width // 2, img.height // 2
+    for i, box in enumerate([
+        (0,  0,  cx, cy),
+        (cx, 0,  img.width, cy),
+        (0,  cy, cx, img.height),
+        (cx, cy, img.width, img.height),
     ]):
-        crop.save(scenes_dir / f"{n}.png")
-    os.remove(fname)
+        img.crop(box).save(scenes_dir / f"{start + i}.png")
+    grid.unlink()
 EOF
 ```
 
-> 그리드 배치 순서: 좌상=1번, 우상=2번, 좌하=3번, 우하=4번
+> 그리드 배치 순서: 좌상=1번, 우상=2번, 좌하=3번, 우하=4번  
+> 크롭 기준: 이미지 정중앙 (cx, cy) — 다른 씬과 픽셀이 절대 혼입되지 않음
 
-### Step 4 — 시퀀스 배치 전처리
+### Step 4 — BGM 설정 및 시퀀스 입력 (`video_config.json`)
 
-씬 번호 배열을 입력하면 `scene_NNN.png` / `clip_NNN.mp4`로 포지션 파일 생성.
-
-```python
-SEQUENCE = [1, 2, 3, 41, 4, 5, ...]  # 원하는 씬 순서 (중복 허용)
-
-import os, shutil
-from pathlib import Path
-
-for pos, n in enumerate(SEQUENCE, 1):
-    shutil.copy2(f"output/scenes/{n}.png", f"output/scenes/scene_{pos:03d}.png")
-    src = Path(f"output/clips/{n}.mp4")
-    if src.exists():
-        os.link(src, f"output/clips/clip_{pos:03d}.mp4")
-```
-
-### Step 5 — BGM 설정 (`video_config.json`)
-
-보이스오버 총 길이 기준으로 시간대별 mood 지정.
+보이스오버 총 길이를 기준으로 시간대별 mood 지정, `scene_sequence`에 재생 순서 입력.
 
 ```json
 {
   "tts": {
     "engine": "aivis",
-    "speaker_id": 1878365379,
-    "speed_scale": 0.9
+    "speaker_id": 1310138980,
+    "speed_scale": 0.9,
+    "pitch_scale": 0.0,
+    "intonation_scale": 1.0,
+    "chunk_limit": 200
   },
   "bgm": {
     "volume": 0.5,
     "crossfade": 3.0,
     "zones": [
-      { "end_sec": 133, "mood": "japanese" },
-      { "end_sec": 304, "mood": "warm" },
-      { "end_sec": 449, "mood": "tense" },
-      { "end_sec": 506, "mood": "sad" },
-      { "end_sec": 701, "mood": "dramatic" },
-      { "end_sec": 968, "mood": "hopeful" },
-      { "end_sec": 1509, "mood": "healing" }
+      { "end_sec": 40,   "mood": "japanese"  },
+      { "end_sec": 320,  "mood": "nostalgic" },
+      { "end_sec": 430,  "mood": "tense"     },
+      { "end_sec": 700,  "mood": "sad"       },
+      { "end_sec": 830,  "mood": "nostalgic" },
+      { "end_sec": 920,  "mood": "healing"   },
+      { "end_sec": 1150, "mood": "dramatic"  },
+      { "end_sec": 1450, "mood": "sad"       },
+      { "end_sec": 1750, "mood": "dramatic"  },
+      { "end_sec": 1979, "mood": "hopeful"   }
     ]
-  }
+  },
+  "scene_sequence": [1, 2, 3, 1, 4, 5, ...]
 }
 ```
 
-**사용 가능한 mood**: `japanese` `warm` `tense` `sad` `dramatic` `hopeful` `healing` `nostalgic` `calm`
+- `scene_sequence`: 씬 번호 배열. 중복 허용, 원하는 순서대로 나열
+- `zones`의 마지막 `end_sec`는 voiceover 실제 길이에 맞출 것
+- **사용 가능한 mood**: `japanese` `warm` `tense` `sad` `dramatic` `hopeful` `healing` `nostalgic` `calm`
 
-### Step 6 — 렌더링
+### Step 5 — 렌더링
 
 ```bash
 python3 render.py
-# → output/final/YYYY-MM-DD.mp4
+# → output/final/YYYY-MM-DD_HHMMSS.mp4
 ```
 
 render.py 실행 흐름:
 
-1. **누락 클립 생성** — `clip_NNN.mp4` 없는 포지션은 `scene_NNN.png`에서 자동 생성 (남은 시간 균등 배분)
-2. **정규화 + concat** — 전체 클립 CFR 강제, PTS 리셋 후 순서대로 이어붙임
+1. **누락 클립 생성** — `N.mp4` 없는 씬은 `N.png`에서 자동 생성 (남은 시간 균등 배분)
+2. **정규화 + concat** — 전체 클립 CFR 강제, PTS 리셋 후 시퀀스 순서대로 이어붙임
 3. **BGM 합성** — mood별 트랙을 구간에 맞게 자르고 crossfade 연결
 4. **자막 생성** — Whisper로 voiceover.mp3 음성 인식 → `.ass` 자막 파일
 5. **최종 렌더** — 본영상 렌더 후 `assets/intro.mp4` prepend
+
+출력 파일명은 실행할 때마다 `YYYY-MM-DD_HHMMSS.mp4`로 고유하게 생성되며 **기존 파일을 덮어쓰지 않는다.**
 
 ---
 
@@ -160,7 +156,7 @@ render.py 실행 흐름:
 ```
 youtube-pipeline/
 ├── script.txt                  ← 낭독 스크립트 (매번 교체)
-├── video_config.json           ← TTS·BGM 설정 (매번 조정)
+├── video_config.json           ← TTS·BGM·시퀀스 설정 (매번 조정)
 ├── gen_voiceover_vvox.py       ← AivisSpeech TTS 생성
 ├── render.py                   ← 렌더링 파이프라인 (수정 불필요)
 │
@@ -171,8 +167,8 @@ youtube-pipeline/
 │   └── fonts/
 │
 └── output/
-    ├── scenes/                 ← scene_NNN.png (전처리 후)
-    ├── clips/                  ← clip_NNN.mp4 (기존 + 자동 생성)
+    ├── scenes/                 ← N.png (1~68, 크롭 후 배치)
+    ├── clips/                  ← N.mp4 (기존 + 자동 생성)
     │   └── _norm/              ← 정규화된 클립 캐시
     ├── audio/
     │   ├── voiceover.mp3
@@ -181,7 +177,7 @@ youtube-pipeline/
     ├── subtitles/
     │   └── subtitles.ass
     └── final/
-        └── YYYY-MM-DD.mp4      ← 최종 완성 영상
+        └── YYYY-MM-DD_HHMMSS.mp4  ← 최종 완성 영상 (실행마다 고유)
 ```
 
 ---
@@ -205,7 +201,7 @@ brew install ffmpeg-full
 
 | 증상                     | 원인                           | 해결                                                  |
 | ------------------------ | ------------------------------ | ----------------------------------------------------- |
-| 특정 시점 이후 까만 화면 | 일부 `clip_NNN.mp4` 생성 누락  | `scene_NNN.png` 네이밍 확인 (3자리 zero-padding 필수) |
+| 특정 시점 이후 까만 화면 | 일부 `N.mp4` 생성 누락         | `output/scenes/N.png` 파일 존재 여부 확인             |
 | 자막 싱크 불일치         | 이전 보이스오버 기준 자막 캐시 | `output/subtitles/subtitles.ass` 삭제 후 재실행       |
 | BGM 없음                 | `bgm_composite.mp3` 캐시 참조  | 해당 파일 삭제 후 재실행                              |
 | VideoToolbox 오류        | Apple Silicon 아님             | `render.py` 내 `h264_videotoolbox` → `libx264`로 변경 |

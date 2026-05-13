@@ -26,12 +26,13 @@ import urllib.request, urllib.parse, urllib.error
 from pathlib import Path
 
 # ── 설정 ─────────────────────────────────────────────────────────────────────
-SPEAKER_ID   = 1878365379  # コハク（ねむたい）
-SPEED_SCALE  = 0.90        # 말 속도 (0.5 ~ 2.0, 낮을수록 느림)
-PITCH_SCALE  = 0.0         # 음높이 (-0.15 ~ 0.15)
-INTONATION   = 1.0         # 억양 강도 (0.0 ~ 2.0)
+_VC          = json.loads((Path(__file__).parent / "video_config.json").read_text())
+SPEAKER_ID   = _VC["tts"]["speaker_id"]
+SPEED_SCALE  = _VC["tts"]["speed_scale"]
+PITCH_SCALE  = _VC["tts"]["pitch_scale"]
+INTONATION   = _VC["tts"]["intonation_scale"]
 VVOX_URL     = "http://localhost:10101"
-CHUNK_LIMIT  = 200       # 한 번에 보낼 최대 글자수 (VoiceVox는 짧게 나눌수록 자연스러움)
+CHUNK_LIMIT  = _VC["tts"]["chunk_limit"]
 
 BASE      = Path(__file__).parent
 AUDIO_DIR = BASE / "output/audio"
