@@ -41,6 +41,16 @@ OUT       = AUDIO_DIR / "voiceover.mp3"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# ── 청크 길이 측정 ───────────────────────────────────────────────────────────
+def _get_duration(path: Path) -> float:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(r.stdout.strip())
+
+
 # ── VoiceVox 서버 체크 ────────────────────────────────────────────────────────
 def check_server():
     try:
@@ -114,7 +124,8 @@ def main():
     chunks = split_script(SCRIPT)
     print(f"화자 ID: {SPEAKER_ID} | 청크: {len(chunks)}개 | 속도: {SPEED_SCALE}")
 
-    chunk_paths = []
+    chunk_paths, timing_data = [], []
+    cursor = 0.0
     for i, chunk in enumerate(chunks, 1):
         wav = AUDIO_DIR / f"vvox_chunk_{i:03d}.wav"
         mp3 = AUDIO_DIR / f"vvox_chunk_{i:03d}.mp3"
@@ -126,11 +137,13 @@ def main():
                 capture_output=True, check=True,
             )
             wav.unlink(missing_ok=True)
+            dur = _get_duration(mp3)
+            timing_data.append({"text": chunk, "start": round(cursor, 3), "end": round(cursor + dur, 3)})
+            cursor += dur
             chunk_paths.append(str(mp3))
             print("완료")
         except Exception as e:
             print(f"❌ {e}")
-            # 실패한 청크는 건너뜀 (무음 대신 경고만)
 
     if not chunk_paths:
         print("❌ 생성된 청크가 없어요."); return
@@ -152,7 +165,10 @@ def main():
         for p in chunk_paths:
             Path(p).unlink(missing_ok=True)
 
+    TIMING_FILE = AUDIO_DIR / "chunks_timing.json"
+    TIMING_FILE.write_text(json.dumps(timing_data, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n✅ {OUT}")
+    print(f"✅ {TIMING_FILE}")
 
 
 if __name__ == "__main__":

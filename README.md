@@ -10,7 +10,7 @@
 | 단계          | 수동 (이전)              | 자동화 (현재)                                        |
 | ------------- | ------------------------ | ---------------------------------------------------- |
 | 나레이션 녹음 | 직접 녹음 또는 외주      | AivisSpeech TTS 자동 생성                            |
-| 자막 작업     | 타임코드 수동 입력       | Whisper 음성 인식 → ASS 자동 생성                    |
+| 자막 작업     | 타임코드 수동 입력       | chunks_timing.json 청크 타임 기준 → ASS 자동 생성    |
 | BGM 편집      | DAW에서 구간별 수동 편집 | `video_config.json` 존 설정 → 자동 크로스페이드 합성 |
 | 씬 편집       | 영상 편집 소프트웨어     | 시퀀스 배열 입력 → 자동 배치 및 클립 생성            |
 | 최종 렌더     | 인코딩 + 수동 합성       | `render.py` 한 번 실행으로 완성                      |
@@ -21,8 +21,8 @@
 
 ## 기술 스택
 
-- **TTS**: AivisSpeech (VoiceVox 호환 로컬 API) — 화자 阿井田 茂（Mid）
-- **자막**: faster-whisper (small 모델, ja) — 실제 음성 기준 타임스탬프 추출
+- **TTS**: AivisSpeech (VoiceVox 호환 로컬 API, 포트 10101) — 화자 阿井田 茂（Mid）
+- **자막**: `chunks_timing.json` 청크 타임스탬프 기반 — Whisper 불필요, 오프라인 즉시 생성
 - **BGM**: FFmpeg `acrossfade` 필터 — mood별 구간 자동 크로스페이드
 - **인코딩**: FFmpeg + Apple VideoToolbox (`h264_videotoolbox`) — M1/M2 하드웨어 가속
 - **자막 렌더링**: libass — ASS 형식, 히라기노 폰트
@@ -56,6 +56,7 @@ video_config.json    →  scene_sequence 입력     →  render.py  →  YYYY-MM
 source venv/bin/activate
 python3 gen_voiceover_vvox.py
 # → output/audio/voiceover.mp3
+# → output/audio/chunks_timing.json  (청크별 start/end 타임스탬프, 자막 생성에 사용)
 ```
 
 **사전 조건**: AivisSpeech 앱 실행 (포트 10101 자동 활성화)
@@ -144,7 +145,7 @@ render.py 실행 흐름:
 1. **누락 클립 생성** — `N.mp4` 없는 씬은 `N.png`에서 자동 생성 (남은 시간 균등 배분)
 2. **정규화 + concat** — 전체 클립 CFR 강제, PTS 리셋 후 시퀀스 순서대로 이어붙임
 3. **BGM 합성** — mood별 트랙을 구간에 맞게 자르고 crossfade 연결
-4. **자막 생성** — Whisper로 voiceover.mp3 음성 인식 → `.ass` 자막 파일
+4. **자막 생성** — `chunks_timing.json` 청크 타임스탬프 기준 → `.ass` 자막 파일 (Whisper 불필요)
 5. **최종 렌더** — 본영상 렌더 후 `assets/intro.mp4` prepend
 
 출력 파일명은 실행할 때마다 `YYYY-MM-DD_HHMMSS.mp4`로 고유하게 생성되며 **기존 파일을 덮어쓰지 않는다.**
@@ -167,11 +168,12 @@ youtube-pipeline/
 │   └── fonts/
 │
 └── output/
-    ├── scenes/                 ← N.png (1~68, 크롭 후 배치)
+    ├── scenes/                 ← N.png (스토리별 가변, 크롭 후 배치)
     ├── clips/                  ← N.mp4 (기존 + 자동 생성)
     │   └── _norm/              ← 정규화된 클립 캐시
     ├── audio/
     │   ├── voiceover.mp3
+    │   ├── chunks_timing.json  ← 청크별 타임스탬프 (자막 생성에 사용)
     │   ├── intro_narration.mp3
     │   └── bgm_composite.mp3
     ├── subtitles/
@@ -202,7 +204,7 @@ brew install ffmpeg-full
 | 증상                     | 원인                           | 해결                                                  |
 | ------------------------ | ------------------------------ | ----------------------------------------------------- |
 | 특정 시점 이후 까만 화면 | 일부 `N.mp4` 생성 누락         | `output/scenes/N.png` 파일 존재 여부 확인             |
-| 자막 싱크 불일치         | 이전 보이스오버 기준 자막 캐시 | `output/subtitles/subtitles.ass` 삭제 후 재실행       |
+| 자막 싱크 불일치         | 이전 chunks_timing.json 캐시   | `gen_voiceover_vvox.py` 재실행 후 `render.py` 실행    |
 | BGM 없음                 | `bgm_composite.mp3` 캐시 참조  | 해당 파일 삭제 후 재실행                              |
 | VideoToolbox 오류        | Apple Silicon 아님             | `render.py` 내 `h264_videotoolbox` → `libx264`로 변경 |
 | `No such filter: ass`    | 표준 ffmpeg (libass 미포함)    | `brew install ffmpeg-full`                            |
@@ -221,9 +223,11 @@ brew install ffmpeg-full
 | 2026-04-28 | —                                                                                  | 24.6분 |
 | 2026-04-29 | —                                                                                  | 31.8분 |
 | 2026-04-30 | 【実話風】雪の夜の誓い｜継母に捨てられた双子が、奪われた家を取り戻すまで          | 25.8분 |
+| 2026-05-18 | 古賀お志乃 / 石喰い畑                                                              | 35.0분 |
+| 2026-05-19 | 霧谷の隠れ湯                                                                       | 42.3분 |
+| 2026-05-19 | 山霧の茶人　お糸                                                                   | 37.8분 |
 
-> 5일간 총 **6편**, 누적 약 **154분** 분량 완성.  
-> 제목 미기재 항목은 업로드 후 추가 예정.
+> 누적 총 **9편**, 약 **269분** 분량 완성.
 
 ---
 

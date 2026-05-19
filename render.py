@@ -29,6 +29,7 @@ NORM_DIR    = CLIPS_DIR / "_norm"
 
 SCRIPT      = Path("script.txt")
 VOICEOVER   = AUDIO_DIR / "voiceover.mp3"
+TIMING_FILE = AUDIO_DIR / "chunks_timing.json"
 INTRO_NAR   = AUDIO_DIR / "intro_narration.mp3"
 BGM         = AUDIO_DIR / "bgm_composite.mp3"
 SUBS        = SUBS_DIR  / "subtitles.ass"
@@ -329,28 +330,35 @@ def _split(text: str, max_chars: int = 22) -> str:
 
 
 def generate_subtitles():
-    import stable_whisper
+    if TIMING_FILE.exists():
+        _generate_subtitles_from_chunks()
+    else:
+        print("  ⚠️  chunks_timing.json 없음 — voiceover를 먼저 재생성하세요")
 
-    # script.txt → 단락 단위 자막 텍스트 구성
-    raw = SCRIPT.read_text(encoding="utf-8")
-    paragraphs = []
-    for para in re.split(r"\n\s*\n", raw):
-        para = para.strip()
-        if para:
-            paragraphs.append(para.replace("\n", ""))
-    full_text = "\n".join(paragraphs)
 
-    print(f"  forced alignment 중... (stable-ts, {len(paragraphs)}단락)")
-    model = stable_whisper.load_faster_whisper("small", device="cpu", compute_type="int8")
-    result = model.align(str(VOICEOVER), full_text, language="ja", original_split=True)
-
+def _generate_subtitles_from_chunks():
+    timing = json.loads(TIMING_FILE.read_text(encoding="utf-8"))
     events = []
-    for seg in result.segments:
-        text = seg.text.strip()
-        if text:
+    for seg in timing:
+        text = seg["text"].strip()
+        if not text:
+            continue
+        start, end = seg["start"], seg["end"]
+        dur = end - start
+
+        # 。！？ 경계로 문장 분할 후 글자 수 비례로 시간 배분
+        sentences = [s.strip() for s in re.split(r'(?<=[。！？])', text) if s.strip()]
+        if not sentences:
+            continue
+        total_chars = sum(len(s) for s in sentences)
+        cursor = start
+        for s in sentences:
+            s_dur = dur * len(s) / total_chars if total_chars > 0 else dur / len(sentences)
             events.append(
-                f"Dialogue: 0,{_ts(seg.start)},{_ts(seg.end)},Default,,0,0,0,,{_split(text)}"
+                f"Dialogue: 0,{_ts(cursor)},{_ts(cursor + s_dur)},Default,,0,0,0,,{_split(s)}"
             )
+            cursor += s_dur
+
     SUBS.write_text(_ass_header() + "\n".join(events), encoding="utf-8")
     print(f"  {len(events)}줄 생성 → {SUBS}")
 
@@ -497,7 +505,8 @@ def main():
     print("\n" + "=" * 60)
     print("[4/5] 자막 생성 (voiceover 기준 0초, shift 없음)")
     print("=" * 60)
-    if not SUBS.exists() or SUBS.stat().st_mtime < VOICEOVER.stat().st_mtime:
+    _timing_newer = TIMING_FILE.exists() and SUBS.exists() and TIMING_FILE.stat().st_mtime > SUBS.stat().st_mtime
+    if not SUBS.exists() or SUBS.stat().st_mtime < VOICEOVER.stat().st_mtime or _timing_newer:
         generate_subtitles()
 
     print("\n" + "=" * 60)
