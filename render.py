@@ -422,8 +422,7 @@ def final_render(scenes_concat: Path) -> Path:
     else:
         vmap = "0:v:0"
 
-    fc.append("[1:a]loudnorm=I=-14:TP=-1.5:LRA=11,"
-              "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[voice_n]")
+    fc.append("[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[voice_n]")
     if bgm_idx is not None:
         fc.append(f"[{bgm_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[bgm_a]")
         fc.append("[voice_n][bgm_a]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]")
