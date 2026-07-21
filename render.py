@@ -47,7 +47,7 @@ for d in [CLIPS_DIR, NORM_DIR, FINAL_DIR, SUBS_DIR]:
 # ── video_config.json ────────────────────────────────────────────────────────
 _VC = json.loads(VIDEO_CFG.read_text()) if VIDEO_CFG.exists() else {}
 _bgm_cfg      = _VC.get("bgm", {})
-BGM_VOLUME    = _bgm_cfg.get("volume", 0.25)
+BGM_VOLUME    = _bgm_cfg.get("volume", 0.2)
 BGM_CROSSFADE = _bgm_cfg.get("crossfade", 3.0)
 BGM_ZONES     = [(z["end_sec"], z["mood"]) for z in _bgm_cfg.get("zones", [])]
 SCENE_SEQUENCE = _VC.get("scene_sequence", [])
@@ -260,19 +260,22 @@ def build_bgm(audio_dur: float):
         print("⚠️  BGM 파일 없음 — 건너뜀"); return
 
     filters, seg_labels = [], []
+    cf = BGM_CROSSFADE
     for i, (dur, mood) in enumerate(zone_list):
         m = mood if mood in mood_idx else next(iter(mood_idx))
         src = mood_idx[m]
         start = offset_map[m]
-        offset_map[m] += dur
+        # acrossfade가 잘라내는 길이만큼 다음 경계 전 세그먼트를 늘려
+        # 최종 BGM이 voiceover보다 일찍 끝나지 않게 한다.
+        trim_dur = dur + (cf if i < len(zone_list) - 1 else 0.0)
+        offset_map[m] += trim_dur
         lbl = f"seg{i}"
         filters.append(
-            f"[{src}:a]atrim=start={start:.3f}:duration={dur:.3f},"
+            f"[{src}:a]atrim=start={start:.3f}:duration={trim_dur:.3f},"
             f"asetpts=PTS-STARTPTS[{lbl}]"
         )
         seg_labels.append(f"[{lbl}]")
 
-    cf = BGM_CROSSFADE
     if len(seg_labels) == 1:
         filters.append(f"{seg_labels[0]}volume={BGM_VOLUME}[bgm_out]")
     else:
@@ -417,12 +420,17 @@ def final_render(scenes_concat: Path) -> Path:
     fc = []
     if SUBS.exists():
         esc = str(SUBS.resolve()).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        fc.append(f"[0:v]ass='{esc}'[vout]")
+        fc.append(f"[0:v]tpad=stop_mode=clone:stop_duration=30,ass='{esc}'[vout]")
         vmap = "[vout]"
     else:
-        vmap = "0:v:0"
+        fc.append("[0:v]tpad=stop_mode=clone:stop_duration=30[vout]")
+        vmap = "[vout]"
 
-    fc.append("[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[voice_n]")
+    # 인코더/컨테이너 경계에서 마지막 음절이 잘리지 않도록 본편 끝에만 여백을 둔다.
+    fc.append(
+        "[1:a]apad=pad_dur=1.0,"
+        "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[voice_n]"
+    )
     if bgm_idx is not None:
         fc.append(f"[{bgm_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[bgm_a]")
         fc.append("[voice_n][bgm_a]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]")
