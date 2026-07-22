@@ -8,6 +8,7 @@ render.py — 최종 렌더링 단일 스크립트
   output/audio/voiceover.mp3   보이스오버
   output/audio/intro_narration.mp3  인트로 나레이션 (있으면 intro.mp4 에 합성)
   assets/intro.mp4             인트로 영상 (없으면 건너뜀)
+  assets/outro.mp4             아웃트로 영상 (없으면 건너뜀)
   assets/bgm_*.mp3             BGM 파일들
 
 출력:
@@ -34,6 +35,7 @@ INTRO_NAR   = AUDIO_DIR / "intro_narration.mp3"
 BGM         = AUDIO_DIR / "bgm_composite.mp3"
 SUBS        = SUBS_DIR  / "subtitles.ass"
 INTRO       = ASSETS_DIR / "intro.mp4"
+OUTRO       = ASSETS_DIR / "outro.mp4"
 VIDEO_CFG   = Path("video_config.json")
 
 FFMPEG_FULL = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"
@@ -65,6 +67,16 @@ def get_duration(path) -> float:
         capture_output=True, text=True, check=True,
     )
     return float(r.stdout.strip())
+
+
+def has_audio_stream(path) -> bool:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=codec_type",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return any(line.strip() == "audio" for line in r.stdout.splitlines())
 
 
 def get_video_info(path):
@@ -400,6 +412,7 @@ def prepare_subtitles(intro_dur: float):
 # ── Step 5: 최종 렌더링 ──────────────────────────────────────────────────────
 def final_render(scenes_concat: Path) -> Path:
     has_intro     = INTRO.exists()
+    has_outro     = OUTRO.exists()
     has_bgm       = BGM.exists()
     has_intro_nar = INTRO_NAR.exists()
     _now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -452,21 +465,47 @@ def final_render(scenes_concat: Path) -> Path:
         print("❌ 본영상 렌더 실패\n", r.stderr[-500:]); sys.exit(1)
     print(f"     완료 ({get_duration(TEMP_MAIN)/60:.1f}분)")
 
-    # ── B: intro.mp4 원본 그대로 + 본영상 → concat filter ────────────────────
-    if has_intro:
-        print("  [B] intro + 본영상 concat...")
+    # ── B: intro + 본영상 + outro → concat filter ────────────────────────────
+    if has_intro or has_outro:
+        segments = []
+        if has_intro:
+            segments.append(("intro", INTRO))
+        segments.append(("main", TEMP_MAIN))
+        if has_outro:
+            segments.append(("outro", OUTRO))
 
-        # intro.mp4는 이미 완성된 영상 — 오디오 일절 건드리지 않음
-        all_inputs = ["-i", str(INTRO), "-i", str(TEMP_MAIN)]
-        fc2 = [
-            f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
-            f"crop={W}:{H},setsar=1,fps={FPS}[iv]",
-            "[0:a]asetpts=PTS-STARTPTS,"
-            "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[ia]",
-            f"[1:v]setsar=1,fps={FPS}[mv]",
-            "[1:a]asetpts=PTS-STARTPTS[ma]",
-            "[iv][ia][mv][ma]concat=n=2:v=1:a=1[vout][aout]",
-        ]
+        print(f"  [B] {' + '.join(name for name, _ in segments)} concat...")
+
+        all_inputs = []
+        fc2 = []
+        concat_parts = []
+        for idx, (name, path) in enumerate(segments):
+            all_inputs += ["-i", str(path)]
+            duration = get_duration(path)
+            video_label = f"{name}_v"
+            audio_label = f"{name}_a"
+            fc2.append(
+                f"[{idx}:v]scale={W}:{H}:force_original_aspect_ratio=increase,"
+                f"crop={W}:{H},setsar=1,fps={FPS},setpts=PTS-STARTPTS[{video_label}]"
+            )
+
+            if has_audio_stream(path):
+                fc2.append(
+                    f"[{idx}:a]asetpts=PTS-STARTPTS,"
+                    "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+                    f"apad,atrim=duration={duration:.6f}[{audio_label}]"
+                )
+            else:
+                # 영상 전용 아웃트로도 안전하게 이어지도록 같은 길이의 무음을 만든다.
+                fc2.append(
+                    "anullsrc=channel_layout=stereo:sample_rate=44100,"
+                    f"atrim=duration={duration:.6f},asetpts=PTS-STARTPTS[{audio_label}]"
+                )
+            concat_parts.append(f"[{video_label}][{audio_label}]")
+
+        fc2.append(
+            f"{''.join(concat_parts)}concat=n={len(segments)}:v=1:a=1[vout][aout]"
+        )
 
         r = subprocess.run([
             FFMPEG, "-y", *all_inputs,
@@ -517,7 +556,7 @@ def main():
         generate_subtitles()
 
     print("\n" + "=" * 60)
-    print("[5/5] 최종 렌더링 (인트로 / 본영상 독립 렌더 후 concat)")
+    print("[5/5] 최종 렌더링 (인트로 / 본영상 / 아웃트로 concat)")
     print("=" * 60)
     final_render(scenes_concat)
 
