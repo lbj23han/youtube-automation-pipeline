@@ -258,10 +258,9 @@ def build_bgm(audio_dur: float):
 
     print(f"  존: {' '.join(f'{m}({d:.0f}s)' for d, m in zone_list)}")
 
-    ALL_MOODS = ["japanese", "calm", "sad", "dramatic", "hopeful", "warm",
-                 "healing", "nostalgic", "tense", "wagashi"]
     inputs_cmd, mood_idx, offset_map = [], {}, {}
-    for i, mood in enumerate(ALL_MOODS):
+    requested_moods = list(dict.fromkeys(mood for _, mood in zone_list))
+    for mood in requested_moods:
         f = _bgm_file_for_mood(mood)
         if f:
             inputs_cmd += ["-stream_loop", "-1", "-i", f]
